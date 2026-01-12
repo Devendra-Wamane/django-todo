@@ -110,8 +110,7 @@ jobs:
 
       - name: Upload static files to S3
         run: |
-          python manage.py collectstatic --noinput
-          aws s3 sync ./static s3://${{ needs.infrastructure.outputs.s3_bucket_name }}/static --delete
+          aws s3 sync ./staticfiles s3://${{ needs.infrastructure.outputs.s3_bucket_name }}/static --delete
 
   # Job 3: Deploy to EC2
   deploy:
