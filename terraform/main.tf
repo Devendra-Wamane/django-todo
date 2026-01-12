@@ -1,4 +1,4 @@
-# Terraform configuration for AWS EC2, S3, and ELB
+# Terraform configuration for AWS EC2, S3, RDS, and ELB
 
 terraform {
   required_providers {
@@ -8,15 +8,6 @@ terraform {
     }
   }
   required_version = ">= 1.0"
-
-  # Uncomment to use S3 backend for state management
-  # backend "s3" {
-  #   bucket         = "your-terraform-state-bucket"
-  #   key            = "django-todo/terraform.tfstate"
-  #   region         = "ap-south-1"
-  #   encrypt        = true
-  #   dynamodb_table = "terraform-lock"
-  # }
 }
 
 provider "aws" {
@@ -28,34 +19,17 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# Data source for latest Ubuntu AMI
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["099720109477"] # Canonical
-
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
-
 #-----------------------------------------------------------
-# VPC and Networking
+# VPC (Required for EC2, RDS, ELB)
 #-----------------------------------------------------------
 
 resource "aws_vpc" "main" {
-  cidr_block           = var.vpc_cidr
+  cidr_block           = "10.0.0.0/16"
   enable_dns_hostnames = true
   enable_dns_support   = true
 
   tags = {
-    Name        = "${var.app_name}-vpc"
-    Environment = var.environment
+    Name = "${var.app_name}-vpc"
   }
 }
 
@@ -63,21 +37,19 @@ resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name        = "${var.app_name}-igw"
-    Environment = var.environment
+    Name = "${var.app_name}-igw"
   }
 }
 
 resource "aws_subnet" "public" {
   count                   = 2
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)
+  cidr_block              = cidrsubnet("10.0.0.0/16", 8, count.index)
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
 
   tags = {
-    Name        = "${var.app_name}-public-subnet-${count.index + 1}"
-    Environment = var.environment
+    Name = "${var.app_name}-public-subnet-${count.index + 1}"
   }
 }
 
@@ -90,8 +62,7 @@ resource "aws_route_table" "public" {
   }
 
   tags = {
-    Name        = "${var.app_name}-public-rt"
-    Environment = var.environment
+    Name = "${var.app_name}-public-rt"
   }
 }
 
@@ -107,7 +78,7 @@ resource "aws_route_table_association" "public" {
 
 resource "aws_security_group" "ec2" {
   name        = "${var.app_name}-ec2-sg"
-  description = "Security group for EC2 instances"
+  description = "Security group for EC2"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -119,15 +90,7 @@ resource "aws_security_group" "ec2" {
   }
 
   ingress {
-    description     = "HTTP from ELB"
-    from_port       = 8000
-    to_port         = 8000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.elb.id]
-  }
-
-  ingress {
-    description = "HTTP Direct"
+    description = "HTTP"
     from_port   = 8000
     to_port     = 8000
     protocol    = "tcp"
@@ -142,8 +105,7 @@ resource "aws_security_group" "ec2" {
   }
 
   tags = {
-    Name        = "${var.app_name}-ec2-sg"
-    Environment = var.environment
+    Name = "${var.app_name}-ec2-sg"
   }
 }
 
@@ -160,20 +122,29 @@ resource "aws_security_group" "elb" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  tags = {
+    Name = "${var.app_name}-elb-sg"
+  }
+}
+
+resource "aws_security_group" "rds" {
+  name        = "${var.app_name}-rds-sg"
+  description = "Security group for RDS"
+  vpc_id      = aws_vpc.main.id
+
   ingress {
-    description = "App Port"
-    from_port   = 8000
-    to_port     = 8000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    description     = "PostgreSQL from EC2"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ec2.id]
   }
 
   egress {
@@ -184,78 +155,23 @@ resource "aws_security_group" "elb" {
   }
 
   tags = {
-    Name        = "${var.app_name}-elb-sg"
-    Environment = var.environment
+    Name = "${var.app_name}-rds-sg"
   }
-}
-
-#-----------------------------------------------------------
-# IAM Role for EC2
-#-----------------------------------------------------------
-
-resource "aws_iam_role" "ec2_role" {
-  name = "${var.app_name}-ec2-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
-  })
-
-  tags = {
-    Name        = "${var.app_name}-ec2-role"
-    Environment = var.environment
-  }
-}
-
-resource "aws_iam_role_policy" "ec2_policy" {
-  name = "${var.app_name}-ec2-policy"
-  role = aws_iam_role.ec2_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "ecr:GetAuthorizationToken",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage"
-        ]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          aws_s3_bucket.app_bucket.arn,
-          "${aws_s3_bucket.app_bucket.arn}/*"
-        ]
-      }
-    ]
-  })
-}
-
-resource "aws_iam_instance_profile" "ec2_profile" {
-  name = "${var.app_name}-ec2-profile"
-  role = aws_iam_role.ec2_role.name
 }
 
 #-----------------------------------------------------------
 # EC2 Instance
 #-----------------------------------------------------------
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"]
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+}
 
 resource "aws_instance" "app" {
   ami                    = data.aws_ami.ubuntu.id
@@ -263,68 +179,33 @@ resource "aws_instance" "app" {
   key_name               = var.key_name
   subnet_id              = aws_subnet.public[0].id
   vpc_security_group_ids = [aws_security_group.ec2.id]
-  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
 
   root_block_device {
     volume_size = 20
     volume_type = "gp3"
-    encrypted   = true
   }
 
-  user_data = base64encode(<<-EOF
-    #!/bin/bash
-    set -e
-
-    # Update system
-    apt-get update -y
-    apt-get upgrade -y
-
-    # Install Docker
-    apt-get install -y apt-transport-https ca-certificates curl software-properties-common
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-    apt-get update -y
-    apt-get install -y docker-ce docker-ce-cli containerd.io
-
-    # Start Docker
-    systemctl start docker
-    systemctl enable docker
-    usermod -aG docker ubuntu
-
-    # Install AWS CLI
-    apt-get install -y awscli
-
-    # Install Docker Compose
-    curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64" -o /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
-
-    echo "EC2 setup completed!"
-  EOF
-  )
-
   tags = {
-    Name        = "${var.app_name}-ec2"
-    Environment = var.environment
+    Name = "${var.app_name}-ec2"
   }
 }
 
 #-----------------------------------------------------------
-# S3 Bucket for Static Files
+# S3 Bucket
 #-----------------------------------------------------------
-
-resource "aws_s3_bucket" "app_bucket" {
-  bucket = "${var.app_name}-static-${random_string.bucket_suffix.result}"
-
-  tags = {
-    Name        = "${var.app_name}-static-bucket"
-    Environment = var.environment
-  }
-}
 
 resource "random_string" "bucket_suffix" {
   length  = 8
   special = false
   upper   = false
+}
+
+resource "aws_s3_bucket" "app_bucket" {
+  bucket = "${var.app_name}-bucket-${random_string.bucket_suffix.result}"
+
+  tags = {
+    Name = "${var.app_name}-s3-bucket"
+  }
 }
 
 resource "aws_s3_bucket_versioning" "app_bucket" {
@@ -334,45 +215,42 @@ resource "aws_s3_bucket_versioning" "app_bucket" {
   }
 }
 
-resource "aws_s3_bucket_server_side_encryption_configuration" "app_bucket" {
-  bucket = aws_s3_bucket.app_bucket.id
+#-----------------------------------------------------------
+# RDS Database
+#-----------------------------------------------------------
 
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
+resource "aws_db_subnet_group" "main" {
+  name       = "${var.app_name}-db-subnet-group"
+  subnet_ids = aws_subnet.public[*].id
+
+  tags = {
+    Name = "${var.app_name}-db-subnet-group"
   }
 }
 
-resource "aws_s3_bucket_public_access_block" "app_bucket" {
-  bucket = aws_s3_bucket.app_bucket.id
+resource "aws_db_instance" "main" {
+  identifier             = "${var.app_name}-db"
+  allocated_storage      = 20
+  storage_type           = "gp2"
+  engine                 = "postgres"
+  engine_version         = "15"
+  instance_class         = var.db_instance_class
+  db_name                = var.db_name
+  username               = var.db_username
+  password               = var.db_password
+  parameter_group_name   = "default.postgres15"
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  vpc_security_group_ids = [aws_security_group.rds.id]
+  publicly_accessible    = false
+  skip_final_snapshot    = true
 
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
-}
-
-resource "aws_s3_bucket_policy" "app_bucket" {
-  bucket = aws_s3_bucket.app_bucket.id
-  depends_on = [aws_s3_bucket_public_access_block.app_bucket]
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid       = "PublicReadGetObject"
-        Effect    = "Allow"
-        Principal = "*"
-        Action    = "s3:GetObject"
-        Resource  = "${aws_s3_bucket.app_bucket.arn}/static/*"
-      }
-    ]
-  })
+  tags = {
+    Name = "${var.app_name}-rds"
+  }
 }
 
 #-----------------------------------------------------------
-# Application Load Balancer (ALB)
+# Elastic Load Balancer (ALB)
 #-----------------------------------------------------------
 
 resource "aws_lb" "app" {
@@ -382,11 +260,8 @@ resource "aws_lb" "app" {
   security_groups    = [aws_security_group.elb.id]
   subnets            = aws_subnet.public[*].id
 
-  enable_deletion_protection = false
-
   tags = {
-    Name        = "${var.app_name}-alb"
-    Environment = var.environment
+    Name = "${var.app_name}-alb"
   }
 }
 
@@ -397,20 +272,15 @@ resource "aws_lb_target_group" "app" {
   vpc_id   = aws_vpc.main.id
 
   health_check {
-    enabled             = true
+    path                = "/todos/"
     healthy_threshold   = 2
     unhealthy_threshold = 2
     timeout             = 5
     interval            = 30
-    path                = "/todos/"
-    port                = "traffic-port"
-    protocol            = "HTTP"
-    matcher             = "200-399"
   }
 
   tags = {
-    Name        = "${var.app_name}-tg"
-    Environment = var.environment
+    Name = "${var.app_name}-tg"
   }
 }
 
@@ -420,7 +290,7 @@ resource "aws_lb_target_group_attachment" "app" {
   port             = 8000
 }
 
-resource "aws_lb_listener" "app_http" {
+resource "aws_lb_listener" "app" {
   load_balancer_arn = aws_lb.app.arn
   port              = "80"
   protocol          = "HTTP"
@@ -429,54 +299,4 @@ resource "aws_lb_listener" "app_http" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.app.arn
   }
-}
-
-resource "aws_lb_listener" "app_8000" {
-  load_balancer_arn = aws_lb.app.arn
-  port              = "8000"
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.app.arn
-  }
-}
-
-#-----------------------------------------------------------
-# ECR Repository
-#-----------------------------------------------------------
-
-resource "aws_ecr_repository" "app" {
-  name                 = var.app_name
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  tags = {
-    Name        = "${var.app_name}-ecr"
-    Environment = var.environment
-  }
-}
-
-resource "aws_ecr_lifecycle_policy" "app" {
-  repository = aws_ecr_repository.app.name
-
-  policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Keep last 10 images"
-        selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = 10
-        }
-        action = {
-          type = "expire"
-        }
-      }
-    ]
-  })
 }

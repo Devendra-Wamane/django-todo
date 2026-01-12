@@ -1,27 +1,15 @@
 # Variables for AWS Infrastructure
 
 variable "aws_region" {
-  description = "AWS region to deploy resources"
+  description = "AWS region"
   type        = string
   default     = "ap-south-1"
 }
 
 variable "app_name" {
-  description = "Application name used for resource naming"
+  description = "Application name"
   type        = string
   default     = "django-todo"
-}
-
-variable "environment" {
-  description = "Environment name (dev, staging, prod)"
-  type        = string
-  default     = "dev"
-}
-
-variable "vpc_cidr" {
-  description = "CIDR block for VPC"
-  type        = string
-  default     = "10.0.0.0/16"
 }
 
 variable "instance_type" {
@@ -31,7 +19,33 @@ variable "instance_type" {
 }
 
 variable "key_name" {
-  description = "Name of the SSH key pair"
+  description = "SSH key pair name"
   type        = string
   default     = "django-todo-key"
+}
+
+# RDS Variables
+variable "db_instance_class" {
+  description = "RDS instance class"
+  type        = string
+  default     = "db.t3.micro"
+}
+
+variable "db_name" {
+  description = "Database name"
+  type        = string
+  default     = "djangotodo"
+}
+
+variable "db_username" {
+  description = "Database username"
+  type        = string
+  default     = "admin"
+}
+
+variable "db_password" {
+  description = "Database password"
+  type        = string
+  sensitive   = true
+  default     = "ChangeMe123!"
 }
