@@ -8,6 +8,13 @@ terraform {
     }
   }
   required_version = ">= 1.0"
+
+  # S3 Backend for remote state storage (enables auto-destroy on failure)
+  backend "s3" {
+    bucket = "django-todo-terraform-state-905317843790"
+    key    = "django-todo/terraform.tfstate"
+    region = "ap-south-1"
+  }
 }
 
 provider "aws" {
