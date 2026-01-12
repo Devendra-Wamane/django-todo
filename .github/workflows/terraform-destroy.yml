@@ -2,36 +2,24 @@ name: Terraform Destroy
 
 on:
   workflow_dispatch:
-    inputs:
-      confirm_destroy:
-        description: 'Type "destroy" to confirm'
-        required: true
-        default: ''
-
-env:
-  AWS_REGION: ap-south-1
 
 jobs:
   destroy:
-    name: Destroy AWS Infrastructure
     runs-on: ubuntu-latest
-    if: github.event.inputs.confirm_destroy == 'destroy'
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v3
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ap-south-1
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.0
+        uses: hashicorp/setup-terraform@v2
 
       - name: Terraform Init
         working-directory: ./terraform
@@ -40,11 +28,3 @@ jobs:
       - name: Terraform Destroy
         working-directory: ./terraform
         run: terraform destroy -auto-approve
-        env:
-          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
-
-      - name: Cleanup Summary
-        run: |
-          echo "=========================================="
-          echo "🗑️ Infrastructure Destroyed Successfully!"
-          echo "=========================================="
