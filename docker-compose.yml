@@ -1,0 +1,16 @@
+services:
+  web:
+    build: .
+    container_name: django-todo-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - sqlite_data:/app/data
+    environment:
+      - DEBUG=1
+      - DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1 [::1]
+    restart: unless-stopped
+
+volumes:
+  sqlite_data:
