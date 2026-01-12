@@ -175,3 +175,60 @@ jobs:
           echo "ELB DNS: ${{ needs.infrastructure.outputs.elb_dns_name }}"
           echo "Application URL: http://${{ needs.infrastructure.outputs.elb_dns_name }}:8000/todos"
           echo "=========================================="
+
+  # Job 4: Auto-destroy on failure (Cleanup)
+  auto-destroy-on-failure:
+    name: Auto Destroy on Failure
+    runs-on: ubuntu-latest
+    needs: [infrastructure, build, deploy]
+    if: failure()  # Only runs if any previous job fails
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Destroy (Auto-cleanup)
+        working-directory: ./terraform
+        run: |
+          echo "=========================================="
+          echo "⚠️  Pipeline failed! Auto-destroying infrastructure..."
+          echo "=========================================="
+          terraform destroy -auto-approve
+        env:
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_app_name: ${{ env.APP_NAME }}
+
+      - name: Cleanup ECR Images (Optional)
+        continue-on-error: true
+        run: |
+          # Delete images from ECR to avoid storage costs
+          aws ecr batch-delete-image \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --image-ids "$(aws ecr list-images --repository-name ${{ env.ECR_REPOSITORY }} --query 'imageIds[*]' --output json)" \
+            2>/dev/null || echo "No images to delete or repository doesn't exist"
+
+      - name: Failure Notification
+        run: |
+          echo "=========================================="
+          echo "🗑️  Auto-Destroy Complete!"
+          echo "=========================================="
+          echo "Infrastructure has been destroyed due to pipeline failure."
+          echo "Please check the failed job logs for more details."
+          echo "=========================================="
