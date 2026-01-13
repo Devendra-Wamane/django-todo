@@ -244,7 +244,8 @@ resource "random_string" "bucket_suffix" {
 }
 
 resource "aws_s3_bucket" "app_bucket" {
-  bucket = "${var.app_name}-bucket-${random_string.bucket_suffix.result}"
+  bucket        = "${var.app_name}-bucket-${random_string.bucket_suffix.result}"
+  force_destroy = true  # Allows deletion even when bucket is not empty
 
   tags = {
     Name = "${var.app_name}-s3-bucket"
